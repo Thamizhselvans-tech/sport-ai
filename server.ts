@@ -12,8 +12,8 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = 3000;
-const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'sportsync.db');
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const DB_PATH = process.env.DATABASE_PATH || (process.env.VERCEL ? '/tmp/sportsync.db' : path.join(__dirname, 'sportsync.db'));
 const IOT_API_KEY = process.env.IOT_API_KEY || '';
 
 // Initialize SQLite Database
@@ -21,7 +21,7 @@ const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
-// Create Persistent Schema
+// Create Persistent Schema (Students, Equipment, RFID Cards, Transactions, Admin Users, Scan Logs)
 db.exec(`
   CREATE TABLE IF NOT EXISTS equipment (
     id TEXT PRIMARY KEY,
@@ -52,6 +52,25 @@ db.exec(`
     email TEXT NOT NULL,
     rfidCardId TEXT NOT NULL,
     activeBorrowsCount INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS rfid_cards (
+    id TEXT PRIMARY KEY,
+    cardUid TEXT NOT NULL UNIQUE,
+    cardType TEXT NOT NULL,
+    assignedToId TEXT,
+    assignedToName TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    createdAt TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS admin_users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    passwordHash TEXT NOT NULL,
+    name TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'admin',
     createdAt TEXT NOT NULL
   );
 
@@ -500,6 +519,49 @@ function seedDatabase(forceReset = false) {
 
 seedDatabase(false);
 
+// Ensure essential IoT test student, equipment, cards, and admin users are guaranteed to exist
+function ensureHardwareSeed() {
+  const nowIso = new Date().toISOString();
+
+  // 1. Ensure ESP32 test student exists
+  const hasStudent = db.prepare('SELECT id FROM students WHERE UPPER(registerNumber) = ?').get('420723104053');
+  if (!hasStudent) {
+    db.prepare(`
+      INSERT INTO students (id, registerNumber, name, department, year, section, phone, email, rfidCardId, activeBorrowsCount, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+    `).run('STU-007', '420723104053', 'Mohamed Amjath S', 'CSE', 'II', 'A', '+91 94432 87654', 'amjath.cse@ckcet.edu.in', '44B7F506_STU', nowIso);
+  }
+
+  // 2. Ensure ESP32 test equipment exists
+  const hasEquipment = db.prepare('SELECT id FROM equipment WHERE UPPER(rfidTag) = ?').get('44B7F506');
+  if (!hasEquipment) {
+    db.prepare(`
+      INSERT INTO equipment (id, name, category, rfidTag, status, condition, rackLocation, totalBorrowsCount, currentBorrowerId, currentBorrowerName, currentBorrowerRegNo, issueDate, dueDate, description, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, NULL, NULL, ?, ?)
+    `).run('EQ-FB-11', 'Nike Strike IoT Pro Football', 'Football', '44B7F506', 'available', 'Excellent', 'Ball Cage A-1', 'Official IoT Test Ball for ESP32 + RC522', nowIso);
+  }
+
+  // 3. Ensure RFID cards table populated
+  const hasCard = db.prepare('SELECT id FROM rfid_cards WHERE UPPER(cardUid) = ?').get('44B7F506');
+  if (!hasCard) {
+    db.prepare(`
+      INSERT OR REPLACE INTO rfid_cards (id, cardUid, cardType, assignedToId, assignedToName, status, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run('CARD-001', '44B7F506', 'equipment', 'EQ-FB-11', 'Nike Strike IoT Pro Football', 'active', nowIso);
+  }
+
+  // 4. Ensure Admin user exists
+  const hasAdmin = db.prepare('SELECT id FROM admin_users WHERE username = ?').get('admin');
+  if (!hasAdmin) {
+    db.prepare(`
+      INSERT OR REPLACE INTO admin_users (id, username, passwordHash, name, role, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run('ADMIN-001', 'admin', 'admin123', 'Sports Director / PET In-Charge', 'superadmin', nowIso);
+  }
+}
+
+ensureHardwareSeed();
+
 // Synchronize overdue statuses in SQLite dynamically based on current server clock
 function syncOverdueStatuses() {
   const nowIso = new Date().toISOString();
@@ -677,11 +739,32 @@ async function startServer() {
     cors({
       origin: '*',
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'Accept'],
     })
   );
 
-  app.use(express.json());
+  // Multi-format request body parsers (JSON, urlencoded, text/plain from Arduino HTTPClient)
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+  app.use(express.text({ type: ['text/plain', 'text/html', 'application/json'] }));
+
+  // Auto-parse stringified JSON if ESP32 sends raw text payload
+  app.use((req, _res, next) => {
+    if (typeof req.body === 'string' && req.body.trim().startsWith('{')) {
+      try {
+        req.body = JSON.parse(req.body);
+      } catch {
+        // keep string
+      }
+    }
+    next();
+  });
+
+  // Strict API response header: guarantee all /api endpoints return application/json
+  app.use('/api', (_req, res, next) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    next();
+  });
 
   // ---------------------------------------------------------------------------
   // 1. REAL-TIME SSE STREAM & FULL SYSTEM STATE ENDPOINTS
@@ -726,9 +809,31 @@ async function startServer() {
   });
 
   // ---------------------------------------------------------------------------
-  // 2. CORE HARDWARE ENDPOINT: POST /api/rfid/scan
+  // 2. CORE HARDWARE ENDPOINT: POST & GET /api/rfid/scan
   // ---------------------------------------------------------------------------
-  app.post('/api/rfid/scan', (req: Request, res: Response) => {
+  app.get(['/api/rfid/scan', '/api/rfid/scan/'], (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      service: 'SPORTSYNC AI - ESP32 RC522 RFID Hardware Gateway',
+      status: 'online',
+      method: 'POST',
+      endpoint: '/api/rfid/scan',
+      expectedJsonFormat: {
+        rfidTag: '44B7F506',
+        mode: 'issue | return | auto',
+        studentReg: '420723104053',
+      },
+      telemetry: {
+        totalHardwareScans: hardwareTelemetry.totalHardwareScans,
+        lastSeenAt: hardwareTelemetry.lastSeenAt,
+        lastIp: hardwareTelemetry.lastIp,
+        lastScannedTag: hardwareTelemetry.lastScannedTag,
+      },
+      message: 'ESP32 RFID API is active. Send HTTP POST with application/json.',
+    });
+  });
+
+  app.post(['/api/rfid/scan', '/api/rfid/scan/'], (req: Request, res: Response) => {
     syncOverdueStatuses();
 
     // Optional API Key verification if client sends x-api-key header and IOT_API_KEY is configured
@@ -859,9 +964,7 @@ async function startServer() {
       broadcastStateUpdate('rfid_scan', { status: 'error', log });
       res.status(404).json({
         success: false,
-        status: 'error',
-        code: 'UNAUTHORIZED_RFID_TAG',
-        message: `Unauthorized or unregistered RFID Tag UID "${rawTag}". Not found in CKCET Sports Inventory.`,
+        message: 'Equipment not registered',
         rfidTag: rawTag,
       });
       return;
@@ -900,15 +1003,9 @@ async function startServer() {
         broadcastStateUpdate('rfid_scan', { status: 'warning', log });
         res.status(400).json({
           success: false,
-          status: 'warning',
-          code: 'STUDENT_REQUIRED',
-          message: `Equipment "${foundEquipment.name}" (${foundEquipment.id}) identified. Provide "studentReg" (register number or student RFID card UID) to issue.`,
-          equipment: {
-            id: foundEquipment.id,
-            name: foundEquipment.name,
-            rfidTag: foundEquipment.rfidTag,
-            status: foundEquipment.status,
-          },
+          message: 'Student registration number required for issue mode',
+          rfidTag: rawTag,
+          mode: 'issue',
         });
         return;
       }
@@ -931,10 +1028,9 @@ async function startServer() {
         broadcastStateUpdate('rfid_scan', { status: 'error', log });
         res.status(404).json({
           success: false,
-          status: 'error',
-          code: 'STUDENT_NOT_FOUND',
-          message: `Student "${effectiveStudentIdentifier}" is not registered in the CKCET Student Directory.`,
+          message: 'Student not registered',
           studentReg: effectiveStudentIdentifier,
+          rfidTag: rawTag,
         });
         return;
       }
@@ -953,16 +1049,10 @@ async function startServer() {
         broadcastStateUpdate('rfid_scan', { status: 'warning', log });
         res.status(409).json({
           success: false,
-          status: 'warning',
-          code: 'EQUIPMENT_ALREADY_BORROWED',
-          message: `Cannot issue "${foundEquipment.name}": Already ${foundEquipment.status.toUpperCase()} by ${foundEquipment.currentBorrowerName} (${foundEquipment.currentBorrowerRegNo}).`,
-          equipment: {
-            id: foundEquipment.id,
-            name: foundEquipment.name,
-            status: foundEquipment.status,
-            currentBorrowerName: foundEquipment.currentBorrowerName,
-            currentBorrowerRegNo: foundEquipment.currentBorrowerRegNo,
-          },
+          message: 'Equipment is already borrowed by another student',
+          rfidTag: rawTag,
+          studentReg: effectiveStudentIdentifier,
+          currentBorrower: foundEquipment.currentBorrowerName,
         });
         return;
       }
@@ -1035,10 +1125,12 @@ async function startServer() {
 
       const responsePayload = {
         success: true,
-        status: 'success',
-        code: 'ISSUE_SUCCESS',
+        message: 'Equipment issued successfully',
+        studentReg: foundStudent.registerNumber,
+        rfidTag: foundEquipment.rfidTag,
         mode: 'issue',
-        message: `Issued "${foundEquipment.name}" to ${foundStudent.name} (${foundStudent.registerNumber}).`,
+        equipmentName: foundEquipment.name,
+        studentName: foundStudent.name,
         transactionId: txId,
         equipment: {
           id: foundEquipment.id,
@@ -1079,14 +1171,9 @@ async function startServer() {
         broadcastStateUpdate('rfid_scan', { status: 'warning', log });
         res.status(409).json({
           success: false,
-          status: 'warning',
-          code: 'EQUIPMENT_ALREADY_AVAILABLE',
-          message: `"${foundEquipment.name}" (${foundEquipment.id}) is already marked AVAILABLE in ${foundEquipment.rackLocation}.`,
-          equipment: {
-            id: foundEquipment.id,
-            name: foundEquipment.name,
-            status: 'available',
-          },
+          message: 'Equipment already returned and available',
+          rfidTag: rawTag,
+          mode: 'return',
         });
         return;
       }
@@ -1189,10 +1276,12 @@ async function startServer() {
 
       const responsePayload = {
         success: true,
-        status: 'success',
-        code: 'RETURN_SUCCESS',
+        message: 'Equipment returned successfully',
+        studentReg: previousBorrowerRegNo || rawStudent || 'N/A',
+        rfidTag: foundEquipment.rfidTag,
         mode: 'return',
-        message: `Returned "${foundEquipment.name}" from ${previousBorrowerName}. Marked AVAILABLE in ${foundEquipment.rackLocation}.`,
+        equipmentName: foundEquipment.name,
+        studentName: previousBorrowerName,
         transactionId: activeTx?.id || null,
         equipment: {
           id: foundEquipment.id,
@@ -1571,7 +1660,69 @@ async function startServer() {
   });
 
   // ---------------------------------------------------------------------------
-  // 7. VITE DEV MIDDLEWARE OR PRODUCTION STATIC ASSETS
+  // 7. RFID CARDS & ADMIN USERS DATABASE ENDPOINTS
+  // ---------------------------------------------------------------------------
+  app.get('/api/rfid-cards', (_req: Request, res: Response) => {
+    const cards = db.prepare('SELECT * FROM rfid_cards ORDER BY createdAt DESC').all();
+    res.json({ success: true, count: cards.length, cards });
+  });
+
+  app.get('/api/admin-users', (_req: Request, res: Response) => {
+    const admins = db.prepare('SELECT id, username, name, role, createdAt FROM admin_users').all();
+    res.json({ success: true, count: admins.length, admins });
+  });
+
+  app.post('/api/admin-users/login', (req: Request, res: Response) => {
+    const { username, password } = req.body;
+    const user = db.prepare('SELECT * FROM admin_users WHERE username = ?').get(username) as Record<string, any> | undefined;
+    if (!user || user.passwordHash !== password) {
+      res.status(401).json({ success: false, message: 'Invalid username or password' });
+      return;
+    }
+    res.json({
+      success: true,
+      message: 'Login successful',
+      user: { id: user.id, username: user.username, name: user.name, role: user.role },
+    });
+  });
+
+  app.get('/api/transactions', (_req: Request, res: Response) => {
+    const txns = db.prepare('SELECT * FROM transactions ORDER BY issueDate DESC').all();
+    res.json({ success: true, count: txns.length, transactions: txns });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 8. CATCH-ALL FOR ALL /api/* ROUTES - GUARANTEE JSON, NEVER HTML
+  // ---------------------------------------------------------------------------
+  app.all('/api/*', (req: Request, res: Response) => {
+    res.status(404).json({
+      success: false,
+      message: `API endpoint "${req.method} ${req.originalUrl}" not found.`,
+      availableEndpoints: [
+        'POST /api/rfid/scan',
+        'GET /api/rfid/scan',
+        'GET /api/state',
+        'GET /api/equipment',
+        'GET /api/students',
+        'GET /api/transactions',
+        'GET /api/rfid-cards',
+        'GET /api/admin-users',
+        'GET /api/events',
+      ],
+    });
+  });
+
+  // Global API error handler ensuring JSON
+  app.use('/api', (err: any, _req: Request, res: Response, _next: any) => {
+    console.error('API Error:', err);
+    res.status(err.status || 500).json({
+      success: false,
+      message: err?.message || 'Internal Server Error',
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 9. VITE DEV MIDDLEWARE OR PRODUCTION STATIC ASSETS
   // ---------------------------------------------------------------------------
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
