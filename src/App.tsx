@@ -40,6 +40,7 @@ import {
   apiClearScanLogs,
   apiResetDatabase,
 } from './utils/api';
+import { loadStoredState } from './utils/storage';
 import { playSuccessChime, playErrorBuzzer } from './utils/audio';
 import { Radio, CheckCircle2, AlertTriangle, ShieldAlert } from 'lucide-react';
 
@@ -93,8 +94,10 @@ export default function App() {
       const state = await fetchSystemState();
       applyServerState(state);
     } catch (err) {
-      console.error('Backend sync error:', err);
+      console.warn('Backend sync warning (running in offline/standalone mode):', err);
       setBackendConnected(false);
+      const fallbackState = loadStoredState();
+      applyServerState(fallbackState);
     }
   }, [applyServerState]);
 
@@ -124,7 +127,7 @@ export default function App() {
 
     const pollTimer = setInterval(() => {
       loadFromBackend();
-    }, 3000);
+    }, 5000);
 
     return () => {
       clearInterval(pollTimer);
@@ -145,13 +148,15 @@ export default function App() {
     return false;
   }).length;
 
-  // Equipment CRUD handlers backed by SQLite
+  // Equipment CRUD handlers backed by SQLite / local storage
   const handleAddEquipment = async (item: Omit<Equipment, 'createdAt' | 'totalBorrowsCount'>) => {
     try {
       const state = await apiAddEquipment(item);
       applyServerState(state);
+      playSuccessChime();
     } catch (err) {
       console.error(err);
+      throw err;
     }
   };
 
@@ -161,6 +166,7 @@ export default function App() {
       applyServerState(state);
     } catch (err) {
       console.error(err);
+      throw err;
     }
   };
 
@@ -170,16 +176,19 @@ export default function App() {
       applyServerState(state);
     } catch (err) {
       console.error(err);
+      throw err;
     }
   };
 
-  // Student CRUD handlers backed by SQLite
+  // Student CRUD handlers backed by SQLite / local storage
   const handleAddStudent = async (studentData: Omit<Student, 'createdAt' | 'activeBorrowsCount'>) => {
     try {
       const state = await apiAddStudent(studentData);
       applyServerState(state);
+      playSuccessChime();
     } catch (err) {
-      console.error(err);
+      console.error('handleAddStudent error:', err);
+      throw err;
     }
   };
 
@@ -189,6 +198,7 @@ export default function App() {
       applyServerState(state);
     } catch (err) {
       console.error(err);
+      throw err;
     }
   };
 
@@ -198,10 +208,11 @@ export default function App() {
       applyServerState(state);
     } catch (err) {
       console.error(err);
+      throw err;
     }
   };
 
-  // Issue / Return handlers backed by SQLite
+  // Issue / Return handlers backed by SQLite / local storage
   const handleIssueEquipment = async (newTx: Transaction, _updatedEq: Equipment) => {
     try {
       const state = await apiManualIssue({
@@ -212,8 +223,10 @@ export default function App() {
         notes: newTx.notes,
       });
       applyServerState(state);
+      playSuccessChime();
     } catch (err) {
       console.error(err);
+      throw err;
     }
   };
 
@@ -230,8 +243,10 @@ export default function App() {
         notes,
       });
       applyServerState(state);
+      playSuccessChime();
     } catch (err) {
       console.error(err);
+      throw err;
     }
   };
 

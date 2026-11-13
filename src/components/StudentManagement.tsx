@@ -24,9 +24,9 @@ import { exportStudentsToCsv } from '../utils/exportCsv';
 interface StudentManagementProps {
   students: Student[];
   transactions: Transaction[];
-  onAddStudent: (student: Omit<Student, 'createdAt' | 'activeBorrowsCount'>) => void;
-  onEditStudent: (student: Student) => void;
-  onDeleteStudent: (id: string) => void;
+  onAddStudent: (student: Omit<Student, 'createdAt' | 'activeBorrowsCount'>) => Promise<void> | void;
+  onEditStudent: (student: Student) => Promise<void> | void;
+  onDeleteStudent: (id: string) => Promise<void> | void;
   onFastIssueToStudent?: (studentRegNo: string) => void;
 }
 
@@ -47,6 +47,8 @@ export const StudentManagement: React.FC<StudentManagementProps> = ({
   const [viewingHistoryStudent, setViewingHistoryStudent] = useState<Student | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [successToast, setSuccessToast] = useState<string | null>(null);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -93,11 +95,11 @@ export const StudentManagement: React.FC<StudentManagementProps> = ({
     });
   };
 
-  const handleSaveAdd = (e: React.FormEvent) => {
+  const handleSaveAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
 
-    const regNo = formData.registerNumber.trim();
+    const regNo = formData.registerNumber.trim().toUpperCase();
     const name = formData.name.trim();
 
     if (!regNo || !name) {
@@ -107,34 +109,45 @@ export const StudentManagement: React.FC<StudentManagementProps> = ({
 
     // Check Duplicate Register Number
     const exists = students.some(
-      (s) => s.registerNumber.toLowerCase() === regNo.toLowerCase()
+      (s) => s.registerNumber.toUpperCase() === regNo
     );
     if (exists) {
       setErrorMsg(`Register Number "${regNo}" is already registered. Duplicate register numbers are not allowed.`);
       return;
     }
 
-    onAddStudent({
-      id: generateId('STU'),
-      registerNumber: regNo,
-      name: name,
-      department: formData.department,
-      year: formData.year,
-      section: formData.section.toUpperCase(),
-      phone: formData.phone.trim() || '+91 90000 00000',
-      email: formData.email.trim() || `${regNo.toLowerCase()}@ckcet.edu.in`,
-      rfidCardId: formData.rfidCardId.trim(),
-    });
+    try {
+      setIsSubmitting(true);
+      const cardUid = formData.rfidCardId.trim() || `STU_CARD_${Math.floor(100000 + Math.random() * 900000).toString(16).toUpperCase()}`;
 
-    setIsAddModalOpen(false);
+      await onAddStudent({
+        id: generateId('STU'),
+        registerNumber: regNo,
+        name: name,
+        department: formData.department,
+        year: formData.year,
+        section: formData.section.toUpperCase(),
+        phone: formData.phone.trim() || '+91 90000 00000',
+        email: formData.email.trim() || `${regNo.toLowerCase()}@ckcet.edu.in`,
+        rfidCardId: cardUid,
+      });
+
+      setIsAddModalOpen(false);
+      setSuccessToast(`Student "${name}" (${regNo}) registered successfully!`);
+      setTimeout(() => setSuccessToast(null), 4000);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to register student. Please check input and try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleSaveEdit = (e: React.FormEvent) => {
+  const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingStudent) return;
     setErrorMsg(null);
 
-    const regNo = formData.registerNumber.trim();
+    const regNo = formData.registerNumber.trim().toUpperCase();
     const name = formData.name.trim();
 
     if (!regNo || !name) {
@@ -144,38 +157,56 @@ export const StudentManagement: React.FC<StudentManagementProps> = ({
 
     // Check duplicate with others
     const exists = students.some(
-      (s) => s.id !== editingStudent.id && s.registerNumber.toLowerCase() === regNo.toLowerCase()
+      (s) => s.id !== editingStudent.id && s.registerNumber.toUpperCase() === regNo
     );
     if (exists) {
       setErrorMsg(`Register Number "${regNo}" is already in use by another student.`);
       return;
     }
 
-    onEditStudent({
-      ...editingStudent,
-      name,
-      registerNumber: regNo,
-      department: formData.department,
-      year: formData.year,
-      section: formData.section.toUpperCase(),
-      phone: formData.phone.trim(),
-      email: formData.email.trim(),
-      rfidCardId: formData.rfidCardId.trim(),
-    });
+    try {
+      setIsSubmitting(true);
+      await onEditStudent({
+        ...editingStudent,
+        name,
+        registerNumber: regNo,
+        department: formData.department,
+        year: formData.year,
+        section: formData.section.toUpperCase(),
+        phone: formData.phone.trim() || '+91 90000 00000',
+        email: formData.email.trim() || `${regNo.toLowerCase()}@ckcet.edu.in`,
+        rfidCardId: formData.rfidCardId.trim() || editingStudent.rfidCardId,
+      });
 
-    setEditingStudent(null);
+      setEditingStudent(null);
+      setSuccessToast(`Student "${name}" updated successfully!`);
+      setTimeout(() => setSuccessToast(null), 4000);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to update student.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (deletingId) {
       const st = students.find((s) => s.id === deletingId);
       if (st && st.activeBorrowsCount > 0) {
         setErrorMsg(`Cannot delete student ${st.name} because they have ${st.activeBorrowsCount} active borrowed equipment items.`);
         return;
       }
-      onDeleteStudent(deletingId);
-      setDeletingId(null);
-      setErrorMsg(null);
+      try {
+        setIsSubmitting(true);
+        await onDeleteStudent(deletingId);
+        setDeletingId(null);
+        setErrorMsg(null);
+        setSuccessToast(`Student deleted successfully.`);
+        setTimeout(() => setSuccessToast(null), 4000);
+      } catch (err: any) {
+        setErrorMsg(err?.message || 'Failed to delete student.');
+      } finally {
+        setIsSubmitting(false);
+      }
     }
   };
 
@@ -227,6 +258,13 @@ export const StudentManagement: React.FC<StudentManagementProps> = ({
           </button>
         </div>
       </div>
+
+      {successToast && (
+        <div className="p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center gap-2 animate-in fade-in slide-in-from-top duration-300">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+          <span>{successToast}</span>
+        </div>
+      )}
 
       {/* Search and Department Filter */}
       <div className="p-4 rounded-2xl bg-[#11141e] border border-amber-500/20 shadow-md flex flex-col sm:flex-row gap-3">
@@ -498,16 +536,18 @@ export const StudentManagement: React.FC<StudentManagementProps> = ({
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setIsAddModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-black font-bold shadow-md cursor-pointer"
+                  disabled={isSubmitting}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-black font-bold shadow-md cursor-pointer disabled:opacity-50"
                 >
-                  Register Student
+                  {isSubmitting ? 'Registering...' : 'Register Student'}
                 </button>
               </div>
             </form>
