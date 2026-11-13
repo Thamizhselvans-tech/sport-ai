@@ -47,10 +47,8 @@
 const char* WIFI_SSID     = "YOUR_WIFI_SSID";         // Replace with your WiFi network name
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";     // Replace with your WiFi password
 
-// Server Endpoint URL:
-// For Local Testing: Use your PC's LAN IP, e.g. "http://192.168.1.100:3000/api/rfid/scan"
-// For Public/Cloud:  Use your HTTPS domain, e.g. "https://your-app.onrender.com/api/rfid/scan"
-const char* SERVER_URL    = "http://192.168.1.100:3000/api/rfid/scan";
+// Live Render Cloud HTTPS Endpoint (Tested & Active)
+const char* SERVER_URL    = "https://sport-ai-pkzc.onrender.com/api/rfid/scan";
 
 // Optional Hardware API Key (leave empty or match IOT_API_KEY in .env)
 const char* IOT_API_KEY   = "";
