@@ -56,8 +56,10 @@ const char* IOT_API_KEY   = "";
 // Default Student Register Number for Issue Mode
 String currentStudentReg  = "420723104053";
 
-// Operation Mode: "issue" or "return" (can be switched dynamically via button on GPIO 15)
-String currentMode        = "issue"; 
+// Operation Mode: "auto" (Fully automatic Issue & Return based on SQLite database)
+// When equipment is AVAILABLE -> Server issues it.
+// When equipment is BORROWED by same student -> Server returns it.
+String currentMode        = "auto"; 
 
 // ======================================================================================
 // 2. HARDWARE PIN DEFINITIONS
@@ -191,7 +193,7 @@ void sendRfidScan(String rfidUid, String mode, String studentReg) {
   StaticJsonDocument<256> doc;
   doc["rfidTag"] = rfidUid;
   doc["mode"] = mode;
-  if (mode == "issue" || studentReg.length() > 0) {
+  if (studentReg.length() > 0) {
     doc["studentReg"] = studentReg;
   }
   doc["source"] = "ESP32_RC522";
@@ -222,10 +224,12 @@ void sendRfidScan(String rfidUid, String mode, String studentReg) {
     bool success = responseDoc["success"] | false;
     const char* message = responseDoc["message"] | "No message";
     const char* tag     = responseDoc["rfidTag"] | rfidUid.c_str();
+    const char* action  = responseDoc["action"] | (responseDoc["mode"] | "auto");
 
     if (success && (httpResponseCode >= 200 && httpResponseCode < 300)) {
       Serial.println("--------------------------------------------------");
-      Serial.println("[SUCCESS] ACTION CONFIRMED BY SERVER!");
+      Serial.println("[SUCCESS] AUTOMATIC ACTION CONFIRMED BY SERVER!");
+      Serial.print("Action     : "); Serial.println(action);
       Serial.print("Message    : "); Serial.println(message);
       Serial.print("RFID Tag   : "); Serial.println(tag);
       Serial.print("Mode       : "); Serial.println(mode);

@@ -38,7 +38,7 @@ export const RfidScanner: React.FC<RfidScannerProps> = ({
   onClearLogs,
   onOpenHardwareGuide,
 }) => {
-  const [scanMode, setScanMode] = useState<'issue' | 'return'>('issue');
+  const [scanMode, setScanMode] = useState<'auto' | 'issue' | 'return'>('auto');
   const [rfidTagInput, setRfidTagInput] = useState('');
   const [studentRegInput, setStudentRegInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -69,7 +69,7 @@ export const RfidScanner: React.FC<RfidScannerProps> = ({
       const { httpStatus, data } = await postRfidScan({
         rfidTag: tag,
         mode: scanMode,
-        studentReg: scanMode === 'issue' ? reg : reg || undefined,
+        studentReg: reg || undefined,
         source: 'WEB_API_TERMINAL',
       });
 
@@ -203,10 +203,27 @@ export const RfidScanner: React.FC<RfidScannerProps> = ({
               <button
                 type="button"
                 onClick={() => {
+                  setScanMode('auto');
+                  setLastApiResponse(null);
+                }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  scanMode === 'auto'
+                    ? 'bg-gradient-to-r from-amber-500 to-emerald-500 text-black shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="Automatically issue or return based on SQLite database state"
+              >
+                <Zap className="w-3.5 h-3.5 fill-current" />
+                <span>Auto Mode</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
                   setScanMode('issue');
                   setLastApiResponse(null);
                 }}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
                   scanMode === 'issue'
                     ? 'bg-amber-500 text-black shadow-md'
                     : 'text-slate-400 hover:text-white'
@@ -222,7 +239,7 @@ export const RfidScanner: React.FC<RfidScannerProps> = ({
                   setScanMode('return');
                   setLastApiResponse(null);
                 }}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
                   scanMode === 'return'
                     ? 'bg-emerald-500 text-black shadow-md'
                     : 'text-slate-400 hover:text-white'
@@ -305,7 +322,7 @@ export const RfidScanner: React.FC<RfidScannerProps> = ({
             <div>
               <label className="block text-xs font-bold text-slate-300 mb-1 flex items-center justify-between">
                 <span>
-                  Student Register No or RFID Card UID ("studentReg") {scanMode === 'issue' ? '*' : '(Optional verification on Return)'}
+                  Student Register No or RFID Card UID ("studentReg") {scanMode === 'issue' ? '*' : scanMode === 'auto' ? '(Auto Issue / Return)' : '(Optional verification on Return)'}
                 </span>
                 <span className="text-[10px] text-amber-400/90 font-medium">
                   Matches registerNumber or rfidCardId
@@ -346,7 +363,9 @@ export const RfidScanner: React.FC<RfidScannerProps> = ({
               type="submit"
               disabled={isSubmitting}
               className={`w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition cursor-pointer shadow-lg active:scale-95 ${
-                scanMode === 'issue'
+                scanMode === 'auto'
+                  ? 'bg-gradient-to-r from-amber-400 via-amber-500 to-emerald-500 hover:from-amber-300 hover:to-emerald-400 text-black shadow-[0_0_20px_rgba(245,158,11,0.35)]'
+                  : scanMode === 'issue'
                   ? 'bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-black shadow-[0_0_20px_rgba(245,158,11,0.3)]'
                   : 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-black shadow-[0_0_20px_rgba(16,185,129,0.3)]'
               }`}
@@ -355,6 +374,8 @@ export const RfidScanner: React.FC<RfidScannerProps> = ({
               <span>
                 {isSubmitting
                   ? 'Sending POST /api/rfid/scan...'
+                  : scanMode === 'auto'
+                  ? 'Send Real POST /api/rfid/scan (AUTO ISSUE / RETURN)'
                   : `Send Real POST /api/rfid/scan (${scanMode.toUpperCase()})`}
               </span>
             </button>

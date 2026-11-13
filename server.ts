@@ -848,7 +848,7 @@ async function startServer() {
     }
 
     const rawTag = String(req.body?.rfidTag || '').trim().toUpperCase();
-    const rawMode = String(req.body?.mode || 'issue').trim().toLowerCase();
+    const rawMode = String(req.body?.mode || 'auto').trim().toLowerCase();
     const rawStudent = String(req.body?.studentReg || '').trim().toUpperCase();
     const durationHours = Number(req.body?.durationHours) || 2;
     const source = String(req.body?.source || 'ESP32_RC522');
@@ -880,8 +880,8 @@ async function startServer() {
       return;
     }
 
-    // Step A: Prevent rapid duplicate scans of the exact same tag + mode within cooldown window
-    const debounceKey = `${rawTag}:${rawMode}:${rawStudent}`;
+    // Step A: Prevent rapid duplicate scans of the exact same tag within cooldown window
+    const debounceKey = `${rawTag}:${rawStudent || 'anonymous'}`;
     const lastScanMs = recentScanMap.get(debounceKey);
     const nowMs = Date.now();
     if (lastScanMs && nowMs - lastScanMs < DUPLICATE_COOLDOWN_MS) {
@@ -1128,7 +1128,8 @@ async function startServer() {
         message: 'Equipment issued successfully',
         studentReg: foundStudent.registerNumber,
         rfidTag: foundEquipment.rfidTag,
-        mode: 'issue',
+        mode: rawMode === 'auto' ? 'auto' : 'issue',
+        action: 'issue',
         equipmentName: foundEquipment.name,
         studentName: foundStudent.name,
         transactionId: txId,
@@ -1202,7 +1203,13 @@ async function startServer() {
             success: false,
             status: 'error',
             code: 'BORROWER_MISMATCH',
-            message: `Student ID mismatch: "${foundEquipment.name}" is checked out to ${foundEquipment.currentBorrowerName} (${foundEquipment.currentBorrowerRegNo}), not ${rawStudent}.`,
+            message: `Equipment is already borrowed by another student (${foundEquipment.currentBorrowerName || 'Student'} - ${foundEquipment.currentBorrowerRegNo || 'N/A'})`,
+            detail: `Student ID mismatch: "${foundEquipment.name}" is checked out to ${foundEquipment.currentBorrowerName} (${foundEquipment.currentBorrowerRegNo}), not ${rawStudent}.`,
+            rfidTag: rawTag,
+            studentReg: rawStudent,
+            currentBorrower: foundEquipment.currentBorrowerName,
+            currentBorrowerRegNo: foundEquipment.currentBorrowerRegNo,
+            mode: rawMode,
           });
           return;
         }
@@ -1279,7 +1286,8 @@ async function startServer() {
         message: 'Equipment returned successfully',
         studentReg: previousBorrowerRegNo || rawStudent || 'N/A',
         rfidTag: foundEquipment.rfidTag,
-        mode: 'return',
+        mode: rawMode === 'auto' ? 'auto' : 'return',
+        action: 'return',
         equipmentName: foundEquipment.name,
         studentName: previousBorrowerName,
         transactionId: activeTx?.id || null,
